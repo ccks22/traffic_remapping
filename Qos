@@ -1,0 +1,31 @@
+Monitoring and Detection:
+
+FlowMonitorHelper is used to install flow monitors on all nodes.
+The CheckQoS function is scheduled to run periodically to analyze flow statistics.
+The function checks for high-priority traffic (or any other suspicious behavior) and logs rogue users.
+
+Mitigation:
+Based on the number of detected rogue users, actions can be taken such as logging, reducing bandwidth, or blocking users.
+In this example, a simple threshold-based detection is implemented. If more than 10% of clients are rogue, an action is logged.
+Actual mitigation actions like bandwidth reduction or blocking can be implemented as needed.
+
+QoS Marking:
+Users can be given the option to change QoS markings to either Voice or Video. This part can be implemented similarly to the previous example by modifying the QoS marking in the ChangeQos function.
+
+
+
+
+Future Enhancements:
+
+Advanced Detection:
+Use machine learning models to detect complex patterns of QoS manipulation.
+Implement more sophisticated statistical analysis for anomaly detection.
+
+Dynamic Policies:
+Create dynamic policies that adapt to changing network conditions.
+Use feedback mechanisms to continuously improve detection and mitigation strategies.
+
+User Education:
+Provide feedback to users about acceptable QoS usage.
+Implement user-friendly mechanisms to report and rectify unintended QoS manipulations.
+This approach ensures a robust mechanism for detecting and dealing with QoS attacks, maintaining the integrity and performance of the network.
