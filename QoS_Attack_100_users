@@ -1,0 +1,179 @@
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/wifi-module.h"
+#include "ns3/mobility-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/flow-monitor-helper.h"
+
+using namespace ns3;
+
+NS_LOG_COMPONENT_DEFINE ("WifiSimpleInfrastructure");
+
+enum QosType
+{
+  VOICE,
+  VIDEO
+};
+
+void ChangeQos (Ptr<Packet> packet, uint32_t userId, uint32_t rogueUsers, QosType qosType)
+{
+  if (userId < rogueUsers)
+    {
+      uint8_t tosValue;
+      if (qosType == VOICE)
+        {
+          tosValue = 0xc0; // Voice AC (DSCP 48)
+        }
+      else if (qosType == VIDEO)
+        {
+          tosValue = 0x80; // Video AC (DSCP 32)
+        }
+      packet->SetTos (tosValue);
+    }
+}
+
+void ScheduleRogueUsers (Ptr<Packet> packet, uint32_t userId, uint32_t rogueUsers, QosType qosType)
+{
+  Simulator::Schedule (Seconds (1.0), &ChangeQos, packet, userId, rogueUsers, qosType);
+}
+
+int main (int argc, char *argv[])
+{
+  bool verbose = true;
+  uint32_t nClients = 100;
+  uint32_t rogueUsers = 0;
+  uint32_t increment = 1;
+  QosType qosType = VOICE;
+
+  CommandLine cmd;
+  cmd.AddValue ("verbose", "Tell echo applications to log if true", verbose);
+  cmd.AddValue ("nClients", "Number of clients", nClients);
+  cmd.AddValue ("rogueUsers", "Number of rogue users", rogueUsers);
+  cmd.AddValue ("increment", "Increment rogue users by", increment);
+  cmd.AddValue ("qosType", "QoS Type for rogue users (0=Voice, 1=Video)", qosType);
+  cmd.Parse (argc, argv);
+
+  if (verbose)
+    {
+      LogComponentEnable ("WifiSimpleInfrastructure", LOG_LEVEL_INFO);
+      LogComponentEnable ("UdpEchoClientApplication", LOG_LEVEL_INFO);
+      LogComponentEnable ("UdpEchoServerApplication", LOG_LEVEL_INFO);
+    }
+
+  NodeContainer wifiStaNodes;
+  wifiStaNodes.Create (nClients);
+  NodeContainer wifiApNode;
+  wifiApNode.Create (1);
+
+  YansWifiChannelHelper channel = YansWifiChannelHelper::Default ();
+  YansWifiPhyHelper phy = YansWifiPhyHelper::Default ();
+  phy.SetChannel (channel.Create ());
+
+  WifiHelper wifi;
+  wifi.SetRemoteStationManager ("ns3::AarfWifiManager");
+
+  WifiMacHelper mac;
+  Ssid ssid = Ssid ("ns-3-ssid");
+
+  mac.SetType ("ns3::StaWifiMac",
+               "Ssid", SsidValue (ssid),
+               "ActiveProbing", BooleanValue (false));
+
+  NetDeviceContainer staDevices;
+  staDevices = wifi.Install (phy, mac, wifiStaNodes);
+
+  mac.SetType ("ns3::ApWifiMac",
+               "Ssid", SsidValue (ssid));
+
+  NetDeviceContainer apDevice;
+  apDevice = wifi.Install (phy, mac, wifiApNode);
+
+  MobilityHelper mobility;
+
+  mobility.SetPositionAllocator ("ns3::GridPositionAllocator",
+                                 "MinX", DoubleValue (0.0),
+                                 "MinY", DoubleValue (0.0),
+                                 "DeltaX", DoubleValue (5.0),
+                                 "DeltaY", DoubleValue (10.0),
+                                 "GridWidth", UintegerValue (10),
+                                 "LayoutType", StringValue ("RowFirst"));
+
+  mobility.SetMobilityModel ("ns3::RandomWalk2dMobilityModel",
+                             "Bounds", RectangleValue (Rectangle (-50, 50, -50, 50)));
+  mobility.Install (wifiStaNodes);
+
+  mobility.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
+  mobility.Install (wifiApNode);
+
+  InternetStackHelper stack;
+  stack.Install (wifiApNode);
+  stack.Install (wifiStaNodes);
+
+  Ipv4AddressHelper address;
+  address.SetBase ("10.1.3.0", "255.255.255.0");
+
+  Ipv4InterfaceContainer staInterfaces;
+  staInterfaces = address.Assign (staDevices);
+  Ipv4InterfaceContainer apInterface;
+  apInterface = address.Assign (apDevice);
+
+  UdpEchoServerHelper echoServer (9);
+
+  ApplicationContainer serverApps = echoServer.Install (wifiApNode.Get (0));
+  serverApps.Start (Seconds (1.0));
+  serverApps.Stop (Seconds (20.0));
+
+  UdpEchoClientHelper echoClient (apInterface.GetAddress (0), 9);
+  echoClient.SetAttribute ("MaxPackets", UintegerValue (100));
+  echoClient.SetAttribute ("Interval", TimeValue (Seconds (1.0)));
+  echoClient.SetAttribute ("PacketSize", UintegerValue (1024));
+
+  ApplicationContainer clientApps;
+  for (uint32_t i = 0; i < nClients; ++i)
+    {
+      clientApps.Add (echoClient.Install (wifiStaNodes.Get (i)));
+    }
+  clientApps.Start (Seconds (2.0));
+  clientApps.Stop (Seconds (20.0));
+
+  // Hook to change QoS incrementally
+  for (uint32_t i = 0; i < nClients; ++i)
+    {
+      Simulator::ScheduleWithContext (wifiStaNodes.Get (i)->GetId (), Seconds (2.0 + i), &ScheduleRogueUsers, i, rogueUsers, qosType);
+    }
+
+  // Incrementally add rogue users
+  for (uint32_t i = 0; i < nClients; i += increment)
+    {
+      Simulator::Schedule (Seconds (2.0 + i), [i, &rogueUsers] { rogueUsers = i; });
+    }
+
+  // Set up flow monitor to detect network performance issues
+  FlowMonitorHelper flowmonHelper;
+  Ptr<FlowMonitor> flowmon = flowmonHelper.InstallAll();
+
+  Simulator::Stop (Seconds (20.0));
+  Simulator::Run ();
+
+  // Analyze flow monitor results
+  flowmon->CheckForLostPackets ();
+  Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier> (flowmonHelper.GetClassifier ());
+  std::map<FlowId, FlowMonitor::FlowStats> stats = flowmon->GetFlowStats ();
+
+  for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin (); i != stats.end (); ++i)
+    {
+      Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (i->first);
+      std::cout << "Flow " << i->first << " (" << t.sourceAddress << " -> " << t.destinationAddress << ")\n";
+      std::cout << "  Tx Bytes:   " << i->second.txBytes << "\n";
+      std::cout << "  Rx Bytes:   " << i->second.rxBytes << "\n";
+      std::cout << "  Tx Packets: " << i->second.txPackets << "\n";
+      std::cout << "  Rx Packets: " << i->second.rxPackets << "\n";
+      std::cout << "  Lost Packets: " << i->second.lostPackets << "\n";
+      std::cout << "  Throughput: " << i->second.rxBytes * 8.0 / 18.0 / 1024 / 1024  << " Mbps\n";
+      std::cout << "  Delay: " << i->second.delaySum.GetSeconds () / i->second.rxPackets << " s\n";
+    }
+
+  Simulator::Destroy ();
+  return 0;
+}
