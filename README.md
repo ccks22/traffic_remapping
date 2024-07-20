@@ -2,7 +2,8 @@ Setting Up the Network:
 Creates one access point (wifiApNode) and 100 client nodes (wifiStaNodes).
 Configures the Wi-Fi channel and PHY layer using YansWifiChannelHelper and YansWifiPhyHelper.
 Uses WifiHelper and WifiMacHelper to set up the Wi-Fi devices with SSID "ns-3-ssid".
-//---------------------------------------------------------------------------------------------
+
+
 Mobility:
 Configures the mobility model for clients and access point. Clients move randomly within a bounded area, and the access point has a fixed position.
 
